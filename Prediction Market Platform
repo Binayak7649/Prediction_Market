@@ -174,3 +174,4 @@ contract PredictionMarket {
         return (bets[_marketId][_user][0], bets[_marketId][_user][1]);
     }
 }
+Contract-Address - 0x01d672C301597d89D4e388334D65Aa8AB0064Ab6
