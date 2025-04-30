@@ -1,0 +1,176 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.17;
+
+/**
+ * @title PredictionMarket
+ * @dev A simple prediction market platform where users can create markets, 
+ * place bets on outcomes, and claim rewards when markets are resolved.
+ */
+contract PredictionMarket {
+    struct Market {
+        address creator;
+        string question;
+        uint256 endTime;
+        bool isResolved;
+        uint8 outcome; // 0 = unresolved, 1 = yes, 2 = no
+        uint256 totalYesAmount;
+        uint256 totalNoAmount;
+    }
+    
+    // Track all markets
+    Market[] public markets;
+    
+    // Track bets for each market: marketId => user => [yesAmount, noAmount]
+    mapping(uint256 => mapping(address => uint256[2])) public bets;
+    
+    // Events
+    event MarketCreated(uint256 indexed marketId, address creator, string question, uint256 endTime);
+    event BetPlaced(uint256 indexed marketId, address user, bool isYes, uint256 amount);
+    event MarketResolved(uint256 indexed marketId, bool outcome);
+    event RewardClaimed(uint256 indexed marketId, address user, uint256 amount);
+    
+    /**
+     * @dev Creates a new prediction market with a specific question and end time
+     * @param _question The question that the market is predicting
+     * @param _endTimeInDays Number of days until market ends
+     */
+    function createMarket(string memory _question, uint256 _endTimeInDays) external {
+        require(bytes(_question).length > 0, "Question cannot be empty");
+        require(_endTimeInDays > 0, "End time must be in the future");
+        
+        uint256 endTime = block.timestamp + (_endTimeInDays * 1 days);
+        
+        markets.push(Market({
+            creator: msg.sender,
+            question: _question,
+            endTime: endTime,
+            isResolved: false,
+            outcome: 0,
+            totalYesAmount: 0,
+            totalNoAmount: 0
+        }));
+        
+        emit MarketCreated(markets.length - 1, msg.sender, _question, endTime);
+    }
+    
+    /**
+     * @dev Place a bet on a specific market outcome
+     * @param _marketId The ID of the market
+     * @param _isYes True if betting on "Yes", false if betting on "No"
+     */
+    function placeBet(uint256 _marketId, bool _isYes) external payable {
+        require(_marketId < markets.length, "Market does not exist");
+        Market storage market = markets[_marketId];
+        
+        require(!market.isResolved, "Market is already resolved");
+        require(block.timestamp < market.endTime, "Market has ended");
+        require(msg.value > 0, "Bet amount must be greater than 0");
+        
+        // Update user's bet
+        if (_isYes) {
+            bets[_marketId][msg.sender][0] += msg.value;
+            market.totalYesAmount += msg.value;
+        } else {
+            bets[_marketId][msg.sender][1] += msg.value;
+            market.totalNoAmount += msg.value;
+        }
+        
+        emit BetPlaced(_marketId, msg.sender, _isYes, msg.value);
+    }
+    
+    /**
+     * @dev Resolve a market by setting the outcome (only creator can resolve)
+     * @param _marketId The ID of the market
+     * @param _outcome True if "Yes" is the outcome, false if "No" is the outcome
+     */
+    function resolveMarket(uint256 _marketId, bool _outcome) external {
+        require(_marketId < markets.length, "Market does not exist");
+        Market storage market = markets[_marketId];
+        
+        require(msg.sender == market.creator, "Only creator can resolve");
+        require(!market.isResolved, "Market is already resolved");
+        require(block.timestamp >= market.endTime, "Market has not ended yet");
+        
+        market.isResolved = true;
+        market.outcome = _outcome ? 1 : 2;
+        
+        emit MarketResolved(_marketId, _outcome);
+    }
+    
+    /**
+     * @dev Claim rewards for a resolved market
+     * @param _marketId The ID of the market
+     */
+    function claimReward(uint256 _marketId) external {
+        require(_marketId < markets.length, "Market does not exist");
+        Market storage market = markets[_marketId];
+        
+        require(market.isResolved, "Market is not resolved yet");
+        
+        uint256[2] storage userBets = bets[_marketId][msg.sender];
+        uint256 winningBet;
+        uint256 totalWinningPool;
+        uint256 totalPool = market.totalYesAmount + market.totalNoAmount;
+        
+        if (market.outcome == 1) { // Yes won
+            winningBet = userBets[0];
+            totalWinningPool = market.totalYesAmount;
+        } else { // No won
+            winningBet = userBets[1];
+            totalWinningPool = market.totalNoAmount;
+        }
+        
+        require(winningBet > 0, "No winning bets");
+        
+        // Calculate reward - original bet plus proportional share of losing pool
+        uint256 reward = winningBet;
+        if (totalWinningPool > 0) {
+            reward += (winningBet * (totalPool - totalWinningPool)) / totalWinningPool;
+        }
+        
+        // Reset user bets to prevent double claiming
+        userBets[0] = 0;
+        userBets[1] = 0;
+        
+        // Send reward
+        (bool sent, ) = payable(msg.sender).call{value: reward}("");
+        require(sent, "Failed to send reward");
+        
+        emit RewardClaimed(_marketId, msg.sender, reward);
+    }
+    
+   
+    function getMarketCount() external view returns (uint256) {
+        return markets.length;
+    }
+    
+   
+    function getMarketDetails(uint256 _marketId) external view returns (
+        address creator,
+        string memory question,
+        uint256 endTime,
+        bool isResolved,
+        uint8 outcome,
+        uint256 totalYesAmount,
+        uint256 totalNoAmount
+    ) {
+        require(_marketId < markets.length, "Market does not exist");
+        Market storage market = markets[_marketId];
+        
+        return (
+            market.creator,
+            market.question,
+            market.endTime,
+            market.isResolved,
+            market.outcome,
+            market.totalYesAmount,
+            market.totalNoAmount
+        );
+    }
+    
+   
+    function getUserBets(uint256 _marketId, address _user) external view returns (uint256 yesBet, uint256 noBet) {
+        require(_marketId < markets.length, "Market does not exist");
+        return (bets[_marketId][_user][0], bets[_marketId][_user][1]);
+    }
+}
